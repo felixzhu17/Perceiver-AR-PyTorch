@@ -9,6 +9,7 @@ class GPTConfig:
     embd_pdrop = 0.1
     resid_pdrop = 0.1
     attn_pdrop = 0.1
+    context_pdrop = 0.25
     perceiver = False
     bottleneck_dim = None
 
@@ -70,7 +71,7 @@ class SubLayerConnection(nn.Module):
 
 
 class Attention(nn.Module):
-    def __init__(self, config, mask = True):
+    def __init__(self, config, causal_mask = True, context = True):
         super().__init__()
         self.n_head = config.n_head
         self.key = nn.Linear(config.n_embd, config.n_embd)
@@ -78,7 +79,9 @@ class Attention(nn.Module):
         self.value = nn.Linear(config.n_embd, config.n_embd)
         self.attn_drop = nn.Dropout(config.attn_pdrop)
         self.proj = nn.Linear(config.n_embd, config.n_embd)
-        self.mask = mask
+        self.causal_mask = causal_mask
+        self.context = context
+        self.context_pdrop = config.context_pdrop
     
     def forward(self, x_k, x_v, x_q):
 
@@ -87,7 +90,26 @@ class Attention(nn.Module):
         B_v, T_v, C_v = x_v.size()
         B_q, T_q, C_q = x_q.size()
 
-        
+
+        if self.context:
+            # Randomly drop the context part of the key
+            context_length = T_k - T_q
+            rand = torch.zeros((B_k, context_length)).uniform_()
+            keep_context_len = context_length - int(context_length * self.context_pdrop)
+            keep_indices = rand.topk(keep_context_len, dim = -1).indices
+            keep_mask = torch.zeros_like(rand).scatter_(1, keep_indices, 1).bool()
+            keep_mask_3d = keep_mask.unsqueeze(-1).expand(-1, -1, C_k)
+
+            x_k_context = x_k[:, :context_length, :]
+            x_k_context = torch.masked_select(x_k_context, keep_mask_3d).view(B_k, -1, C_k)
+            x_k = torch.cat((x_k_context, x_k[:, context_length:, :]), dim = 1)
+            B_k, T_k, C_k = x_k.size() 
+
+            x_v_context = x_v[:, :context_length, :]
+            x_v_context = torch.masked_select(x_v_context, keep_mask_3d).view(B_k, -1, C_k)
+            x_v = torch.cat((x_v_context, x_v[:, context_length:, :]), dim = 1)
+            B_v, T_v, C_v = x_v.size()
+
         k = self.key(x_k)
         v = self.value(x_v)
         q = self.query(x_q)
@@ -98,16 +120,16 @@ class Attention(nn.Module):
         v = v.view(B_v, T_v, self.n_head, C_v // self.n_head).transpose(1, 2)
 
         attn = q @ k.transpose(-2, -1) * (1.0 / math.sqrt(k.size(-1))) # (B, nh, M, hs) x (B, nh, hs, L) -> (B, nh, M, L)
-        if self.mask:
-            mask = torch.ones_like(attn)
+
+        if self.causal_mask:
             # Attention is a rectangular matrix with query on the rows and key on the columns
             # We want to apply a causal mask to the right of the rectangle as the query is the last elements of the key
-            triangle_mask = torch.tril(torch.ones((attn.size(2), attn.size(2))))  # lower triangular part is 1, upper is 0
-            # Apply the triangle mask
-            mask[:, :, :, -attn.size(2):] *= triangle_mask[None, None, :, :]
-            attn = attn.masked_fill(mask == 0, -1e10)
+            causal_mask = torch.ones_like(attn, dtype = torch.bool).triu(attn.size(-1) - attn.size(-2) + 1)
+            attn = attn.masked_fill(causal_mask, -1e10)
+
         attn = self.attn_drop(attn)
         attn = F.softmax(attn, dim=-1)
+        
         y = attn @ v
         y = y.transpose(1, 2).contiguous().view(B_q, T_q, C_v)
         y = self.proj(y)
@@ -117,7 +139,7 @@ class DownProjectBlock(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.latent_size = config.latent_size
-        self.attn = Attention(config)
+        self.attn = Attention(config, context = True)
         self.mlp = nn.Sequential(
             nn.Linear(config.n_embd, 4 * config.n_embd),
             nn.GELU(),

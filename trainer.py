@@ -60,7 +60,7 @@ class Trainer:
 
     def train(self):
         model, config = self.model, self.config
-        model.requires_grad_(True)
+        model.train()
         # create the optimizer
         no_decay = ["bias", "LayerNorm.weight"]
         params_decay = [
