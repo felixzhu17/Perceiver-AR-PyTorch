@@ -51,7 +51,7 @@ class PositionalEmbedding(nn.Module):
             kept_values = self.pos[:seq_len-first_index, :]
 
             # Create a tensor of zeros with the same shape as the positional embeddings that will be replaced
-            zeros_to_add = torch.zeros([first_index, self.pos.size(1)], dtype=torch.float32)
+            zeros_to_add = torch.zeros([first_index, self.pos.size(1)], dtype=torch.float32, device = self.pos.device)
 
             # Replace the beginning of the positional embeddings with zeros
             output = torch.cat((zeros_to_add, kept_values), dim=0)
@@ -94,10 +94,10 @@ class Attention(nn.Module):
         if self.context:
             # Randomly drop the context part of the key
             context_length = T_k - T_q
-            rand = torch.zeros((B_k, context_length)).uniform_()
+            rand = torch.zeros((B_k, context_length), device=x_k.device).uniform_()
             keep_context_len = context_length - int(context_length * self.context_pdrop)
             keep_indices = rand.topk(keep_context_len, dim = -1).indices
-            keep_mask = torch.zeros_like(rand).scatter_(1, keep_indices, 1).bool()
+            keep_mask = torch.zeros_like(rand, device=x_k.device).scatter_(1, keep_indices, 1).bool()
             keep_mask_3d = keep_mask.unsqueeze(-1).expand(-1, -1, C_k)
 
             x_k_context = x_k[:, :context_length, :]

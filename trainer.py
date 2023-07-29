@@ -47,8 +47,8 @@ class Trainer:
         # take over whatever gpus are on the system
         self.device = "cpu"
         if torch.cuda.is_available():
-            self.device = torch.cuda.current_device()
-            self.model = torch.nn.DataParallel(self.model).to(self.device)
+            self.device = "cuda"
+            self.model = self.model.to(self.device)
 
     def save_checkpoint(self):
         if self.config.ckpt_path is not None:
@@ -60,16 +60,16 @@ class Trainer:
 
     def train(self):
         model, config = self.model, self.config
-        model.train()
+        self.model.train()
         # create the optimizer
         no_decay = ["bias", "LayerNorm.weight"]
         params_decay = [
             p
-            for n, p in model.named_parameters()
+            for n, p in self.model.named_parameters()
             if not any(nd in n for nd in no_decay)
         ]
         params_nodecay = [
-            p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)
+            p for n, p in self.model.named_parameters() if any(nd in n for nd in no_decay)
         ]
         optim_groups = [
             {"params": params_decay, "weight_decay": config.weight_decay},
@@ -82,7 +82,7 @@ class Trainer:
 
         def run_epoch():
             nonlocal step
-            model.train(True)
+            self.model.train(True)
             data = self.train_dataset
             loader = DataLoader(
                 data, batch_size=config.batch_size, num_workers=config.num_workers
@@ -91,14 +91,13 @@ class Trainer:
             pbar = (tqdm(enumerate(loader), total=len(loader)))
 
             for it, (x, y) in pbar:
-
                 # place data on the correct device
                 x = x.to(self.device)
                 y = y.to(self.device)
 
                 # forward the model
                 with torch.set_grad_enabled(True):
-                    logits = model(x)
+                    logits = self.model(x)
                     loss_fn = torch.nn.CrossEntropyLoss()
                     loss = loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))
 
